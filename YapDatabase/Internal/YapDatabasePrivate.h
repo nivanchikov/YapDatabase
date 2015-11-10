@@ -12,6 +12,7 @@
 #import "YapMutationStack.h"
 
 #import "sqlite3.h"
+#import "yap_vfs_shim.h"
 
 /**
  * Helper method to conditionally invoke sqlite3_finalize on a statement, and then set the ivar to NULL.
@@ -126,7 +127,7 @@ static NSString *const ext_key_class = @"class";
  *
  * - snapshot : NSNumber with the changeset's snapshot
 **/
-- (void)notePendingChanges:(NSDictionary *)changeset fromConnection:(YapDatabaseConnection *)connection;
+- (void)notePendingChangeset:(NSDictionary *)changeset fromConnection:(YapDatabaseConnection *)connection;
 
 /**
  * This method is only accessible from within the snapshotQueue.
@@ -134,9 +135,9 @@ static NSString *const ext_key_class = @"class";
  * This method is used if a transaction finds itself in a race condition.
  * That is, the transaction started before it was able to process changesets from sibling connections.
  * 
- * It should fetch the changesets needed and then process them via [connection noteCommittedChanges:].
+ * It should fetch the changesets needed and then process them via [connection noteCommittedChangeset:].
 **/
-- (NSArray *)pendingAndCommittedChangesSince:(uint64_t)connectionSnapshot until:(uint64_t)maxSnapshot;
+- (NSArray *)pendingAndCommittedChangesetsSince:(uint64_t)connectionSnapshot until:(uint64_t)maxSnapshot;
 
 /**
  * This method is only accessible from within the snapshotQueue.
@@ -148,7 +149,7 @@ static NSString *const ext_key_class = @"class";
  * 
  * - snapshot : NSNumber with the changeset's snapshot
 **/
-- (void)noteCommittedChanges:(NSDictionary *)changeset fromConnection:(YapDatabaseConnection *)connection;
+- (void)noteCommittedChangeset:(NSDictionary *)changeset fromConnection:(YapDatabaseConnection *)connection;
 
 /**
  * This method should be called whenever the maximum checkpointable snapshot is incremented.
@@ -187,9 +188,9 @@ static NSString *const ext_key_class = @"class";
 	
 	BOOL hasDiskChanges;
 	
-	YapCache *keyCache;
-	YapCache *objectCache;
-	YapCache *metadataCache;
+	YapCache<NSNumber *, YapCollectionKey *> *keyCache;
+	YapCache<YapCollectionKey *, id> *objectCache;
+	YapCache<YapCollectionKey *, id> *metadataCache;
 	
 	NSUInteger objectCacheLimit;          // Read-only by transaction. Use as consideration of whether to add to cache.
 	NSUInteger metadataCacheLimit;        // Read-only by transaction. Use as consideration of whether to add to cache.
@@ -198,6 +199,9 @@ static NSString *const ext_key_class = @"class";
 	YapDatabasePolicy metadataPolicy;     // Read-only by transaction. Use to determine what goes in metadataChanges.
 	
 	BOOL needsMarkSqlLevelSharedReadLock; // Read-only by transaction. Use as consideration of whether to invoke method.
+	
+	yap_file *main_file;
+	yap_file *wal_file;
 	
 	NSMutableDictionary *objectChanges;
 	NSMutableDictionary *metadataChanges;
@@ -262,15 +266,10 @@ static NSString *const ext_key_class = @"class";
 - (BOOL)registerMemoryTable:(YapMemoryTable *)table withName:(NSString *)name;
 - (void)unregisterMemoryTableWithName:(NSString *)name;
 
-- (YapDatabaseReadTransaction *)newReadTransaction;
-- (YapDatabaseReadWriteTransaction *)newReadWriteTransaction;
-
 - (void)markSqlLevelSharedReadLockAcquired;
 
 - (void)getInternalChangeset:(NSMutableDictionary **)internalPtr externalChangeset:(NSMutableDictionary **)externalPtr;
-- (void)processChangeset:(NSDictionary *)changeset;
-
-- (void)noteCommittedChanges:(NSDictionary *)changeset;
+- (void)noteCommittedChangeset:(NSDictionary *)changeset;
 
 - (void)maybeResetLongLivedReadTransaction;
 
@@ -404,6 +403,10 @@ static NSString *const ext_key_class = @"class";
 - (void)_enumerateRowsInAllCollectionsUsingBlock:
                 (void (^)(int64_t rowid, NSString *collection, NSString *key, id object, id metadata, BOOL *stop))block
      withFilter:(BOOL (^)(int64_t rowid, NSString *collection, NSString *key))filter;
+
+- (void)_enumerateRowidsForKeys:(NSArray *)keys
+                   inCollection:(NSString *)collection
+            unorderedUsingBlock:(void (^)(NSUInteger keyIndex, int64_t rowid, BOOL *stop))block;
 
 @end
 

@@ -1078,21 +1078,14 @@ static NSString *const ext_key_version_deprecated = @"version";
 	BOOL stop = NO;
 	YapMutationStackItem_Bool *mutation = [parentConnection->mutationStack push]; // mutation during enum protection
 
-	int status = sqlite3_step(statement);
-	if (status == SQLITE_ROW)
+	int status;
+	while ((status = sqlite3_step(statement)) == SQLITE_ROW)
 	{
-		if (databaseTransaction->connection->needsMarkSqlLevelSharedReadLock)
-			[databaseTransaction->connection markSqlLevelSharedReadLockAcquired];
+		int64_t rowid = sqlite3_column_int64(statement, SQLITE_COLUMN_START);
 
-		do
-		{
-			int64_t rowid = sqlite3_column_int64(statement, SQLITE_COLUMN_START);
+		block(rowid, &stop);
 
-			block(rowid, &stop);
-
-			if (stop || mutation.isMutated) break;
-
-		} while ((status = sqlite3_step(statement)) == SQLITE_ROW);
+		if (stop || mutation.isMutated) break;
 	}
 
 	if ((status != SQLITE_DONE) && !stop && !mutation.isMutated)
@@ -1283,9 +1276,6 @@ static NSString *const ext_key_version_deprecated = @"version";
 	int status = sqlite3_step(statement);
 	if (status == SQLITE_ROW)
 	{
-		if (databaseTransaction->connection->needsMarkSqlLevelSharedReadLock)
-			[databaseTransaction->connection markSqlLevelSharedReadLockAcquired];
-
 		count = (NSUInteger)sqlite3_column_int64(statement, SQLITE_COLUMN_START);
 	}
 	else if (status == SQLITE_ERROR)
@@ -1300,6 +1290,40 @@ static NSString *const ext_key_version_deprecated = @"version";
 
 	if (countPtr) *countPtr = count;
 	return result;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+#pragma mark Query Utilities
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * This method assists in performing a query over a subset of rows,
+ * where the subset is a known set of keys.
+ *
+ * For example:
+ *
+ * Say you have a known set of items, and you want to figure out which of these items fit in the rectangle.
+ *
+ * NSArray *keys = [self itemKeys];
+ * NSArray *rowids = [[[transaction ext:@"idx"] rowidsForKeys:keys inCollection:@"tracks"] allValues];
+ *
+ * YapDatabaseQuery *query =
+ *   [YapDatabaseQuery queryWithFormat:@"WHERE minLon > 0 AND maxLat <= 10 AND rowid IN (?)", rowids];
+ **/
+- (NSDictionary<NSString*, NSNumber*> *)rowidsForKeys:(NSArray<NSString *> *)keys
+										 inCollection:(nullable NSString *)collection
+{
+	NSMutableDictionary<NSString*, NSNumber*> *results = [NSMutableDictionary dictionaryWithCapacity:keys.count];
+	
+	[databaseTransaction _enumerateRowidsForKeys:keys
+	                                inCollection:collection
+	                         unorderedUsingBlock:^(NSUInteger keyIndex, int64_t rowid, BOOL *stop)
+	{
+		NSString *key = keys[keyIndex];
+		results[key] = @(rowid);
+	}];
+	
+	return results;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
