@@ -1,6 +1,8 @@
 #import <Foundation/Foundation.h>
 #import "YapDatabaseExtensionTransaction.h"
 
+@class YapCollectionKey;
+
 NS_ASSUME_NONNULL_BEGIN
 
 @interface YapDatabaseCloudKitTransaction : YapDatabaseExtensionTransaction
